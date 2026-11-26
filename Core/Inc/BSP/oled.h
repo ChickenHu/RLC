@@ -1,0 +1,43 @@
+#pragma once
+#include "i2c.h"
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define OLED_ADDRESS 0x78
+
+typedef struct {
+	I2C_HandleTypeDef *OLED;
+	uint8_t FrameBuffer[129 * 16];
+	uint8_t *FrameBufferPtr;
+	uint8_t *FrameBufferPrevPtr;
+	uint8_t nextPage;
+} OLED_HandleTypeDef;
+
+extern OLED_HandleTypeDef OLED1;
+extern const uint8_t FreshPeriod;
+
+extern HAL_StatusTypeDef OLED_Send(OLED_HandleTypeDef *oled, uint8_t *data,
+								   uint8_t len);
+
+extern void OLED_Init(I2C_HandleTypeDef *hi2c);
+
+extern void OLED_SendCmd(OLED_HandleTypeDef *oled, uint8_t cmd);
+
+extern void OLED_Clear(OLED_HandleTypeDef *oled);
+
+extern void OLED_FreshFrame(OLED_HandleTypeDef *oled);
+
+extern bool OLED_PendingChanges(const OLED_HandleTypeDef *oled);
+
+extern void OLED_DrawPixel(uint8_t *frameBuffer, uint8_t x, uint8_t y);
+
+extern void OLED_Delete(uint8_t *frameBuffer, uint8_t x, uint8_t y,
+						uint8_t width, uint8_t height);
+
+extern void OLED_DrawLine(uint8_t *frameBuffer, uint8_t x0, uint8_t y0,
+						  uint8_t x1, uint8_t y1);
+
+extern void OLED_AddLayer(uint8_t *frameBuffer, uint8_t *layer);
+
+extern void OLED_UpdateState(OLED_HandleTypeDef *oled);
