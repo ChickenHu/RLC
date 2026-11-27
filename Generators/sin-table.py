@@ -11,7 +11,7 @@ for POINT_NUM in [16, 20, 32, 80, 160, 256]:
 
     # 一个周期 POINT_NUM 个点
     # These modes use one point per phase without repeating the endpoint.
-    n = np.linspace(0, 2 * pi, POINT_NUM, endpoint=POINT_NUM not in (16, 20, 80))
+    n = np.linspace(0, 2 * pi, POINT_NUM, endpoint=POINT_NUM not in (16, 20, 32, 80))
     # Nominal DAC level before the reconstruction filter.
     peak_scale = 0.5 * math.sqrt(2) / (3.3 / 2)
 

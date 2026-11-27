@@ -13,7 +13,7 @@ typedef enum {
 HAL_StatusTypeDef Sample_Init(void);
 
 /* Start a continuous capture. The first whole window is discarded. The buffer
- * holds one snapshot followed by two DMA halves, each cycles * dds_points
+ * holds one snapshot followed by two DMA halves, each cycles * adc_points
  * uint16_t samples. Align it to a uint32_t boundary and keep it valid until
  * acquisition stops. Call the sample API from the main loop. */
 HAL_StatusTypeDef Sample_Start(const Mode_t *mode, SampleSource source,

@@ -3,31 +3,39 @@
 const Mode_t Mode1 = {
     .dds_table = SINE_WAVE_256.value,
     .dds_points = 256,
+    .adc_points = 256,
     .capture_cycles = 8,
-    .tim_arr = 6249,
+    .dac_arr = 6249,
+    .adc_arr = 6249,
     .dds_freq = FREQ_1E2,
 };
 
 const Mode_t Mode2 = {
     .dds_table = SINE_WAVE_160.value,
     .dds_points = 160,
+    .adc_points = 160,
     .capture_cycles = 13,
-    .tim_arr = 999,
+    .dac_arr = 999,
+    .adc_arr = 999,
     .dds_freq = FREQ_1E3,
 };
 
 const Mode_t Mode3 = {
     .dds_table = SINE_WAVE_80.value,
     .dds_points = 80,
+    .adc_points = 80,
     .capture_cycles = 26,
-    .tim_arr = 199,
+    .dac_arr = 199,
+    .adc_arr = 199,
     .dds_freq = FREQ_1E4,
 };
 
 const Mode_t Mode4 = {
-    .dds_table = SINE_WAVE_20.value,
-    .dds_points = 20,
-    .capture_cycles = 103,
-    .tim_arr = 79,
+    .dds_table = SINE_WAVE_32.value,
+    .dds_points = 32,
+    .adc_points = 16,
+    .capture_cycles = 128,
+    .dac_arr = 49,
+    .adc_arr = 99,
     .dds_freq = FREQ_1E5,
 };

@@ -18,6 +18,21 @@ static bool discard_first;
 static uint32_t started_at, window_samples;
 static uint16_t *snapshot, *dma_samples;
 
+static void StopTriggerTimers(void) {
+    (void)HAL_TIM_Base_Stop(&htim1);
+    (void)HAL_TIM_Base_Stop(&htim2);
+    (void)HAL_TIM_Base_Stop(&htim3);
+}
+
+static void PrepareTriggerTimer(TIM_HandleTypeDef *timer, uint16_t period) {
+    timer->Init.Period = period;
+    timer->Instance->ARR = period;
+    /* Reload PSC/ARR before either converter is armed. UG emits update TRGO. */
+    timer->Instance->EGR = TIM_EGR_UG;
+    timer->Instance->CNT = 0U;
+    timer->Instance->SR = ~TIM_SR_UIF;
+}
+
 HAL_StatusTypeDef Sample_Init(void) {
     if (state != SAMPLE_IDLE) return HAL_BUSY;
     initialized = false;
@@ -39,11 +54,11 @@ HAL_StatusTypeDef Sample_Start(const Mode_t *mode, SampleSource source,
                                uint32_t cycles, uint16_t *buffer,
                                uint32_t buffer_capacity) {
     if (state != SAMPLE_IDLE) return HAL_BUSY;
-    if (!initialized || !mode || !mode->dds_table || !mode->dds_points ||
+    if (!initialized || !mode || !mode->dds_table || !mode->dds_points || !mode->adc_points ||
         !cycles || !buffer || ((uintptr_t)buffer % sizeof(uint32_t)) != 0U ||
         cycles > UINT16_MAX)
         return HAL_ERROR;
-    uint32_t sample_count = cycles * mode->dds_points;
+    uint32_t sample_count = cycles * mode->adc_points;
     if (sample_count > buffer_capacity / 3U || sample_count > UINT16_MAX / 2U ||
         sample_count % 2U != 0U)
         return HAL_ERROR;
@@ -77,27 +92,11 @@ HAL_StatusTypeDef Sample_Start(const Mode_t *mode, SampleSource source,
             return HAL_ERROR;
     }
 
-    if (HAL_TIM_Base_Stop(&htim6) != HAL_OK) return HAL_ERROR;
+    StopTriggerTimers();
     if (HAL_DAC_Stop_DMA(&hdac3, DAC_CHANNEL_1) != HAL_OK) return HAL_ERROR;
 
-    ADC_ChannelConfTypeDef channel = {
-        .Channel = ADC_CHANNEL_3,
-        .Rank = ADC_REGULAR_RANK_1,
-        .SamplingTime = mode->dds_freq == FREQ_1E5 ? ADC_SAMPLETIME_2CYCLES_5 :
-                                                   ADC_SAMPLETIME_6CYCLES_5,
-        .SingleDiff = ADC_SINGLE_ENDED,
-        .OffsetNumber = ADC_OFFSET_NONE,
-    };
-    if (HAL_ADC_ConfigChannel(&hadc2, &channel) != HAL_OK) return HAL_ERROR;
-
-    /* UG also emits TRGO. Issue it before arming either DMA. */
-    TIM_TypeDef *tim = htim6.Instance;
-    tim->ARR = mode->tim_arr;
-    htim6.Init.Period = mode->tim_arr;
-    tim->CNT = 0U;
-    tim->EGR = TIM_EGR_UG;
-    /* TIM status flags clear on zero, DAC underrun clears on one. */
-    tim->SR = ~TIM_SR_UIF;
+    PrepareTriggerTimer(&htim2, mode->dac_arr);
+    PrepareTriggerTimer(&htim3, mode->adc_arr);
     hdac3.Instance->SR = DAC_SR_DMAUDR1;
     /* The first trigger converts the preloaded code and requests table[0]. */
     if (HAL_DAC_SetValue(&hdac3, DAC_CHANNEL_1, DAC_ALIGN_12B_R,
@@ -115,9 +114,12 @@ HAL_StatusTypeDef Sample_Start(const Mode_t *mode, SampleSource source,
     ready = failed = false;
     started_at = HAL_GetTick();
     accepting_windows = true;
+    /* TIM2 and TIM3 wait in trigger mode until TIM1 raises its enable TRGO. */
     if (HAL_ADC_Start_DMA(&hadc2, (uint32_t *)dma_samples, 2U * sample_count) != HAL_OK ||
-        HAL_TIM_Base_Start(&htim6) != HAL_OK) {
+        HAL_TIM_Base_Start(&htim2) != HAL_OK || HAL_TIM_Base_Start(&htim3) != HAL_OK ||
+        HAL_TIM_Base_Start(&htim1) != HAL_OK) {
         accepting_windows = false;
+        StopTriggerTimers();
         HAL_ADC_Stop_DMA(&hadc2);
         HAL_DAC_Stop_DMA(&hdac3, DAC_CHANNEL_1);
         return HAL_ERROR;
@@ -128,7 +130,8 @@ HAL_StatusTypeDef Sample_Start(const Mode_t *mode, SampleSource source,
 
 HAL_StatusTypeDef Sample_Poll(uint32_t timeout_ms) {
     if (state == SAMPLE_IDLE) return HAL_ERROR;
-    if (failed || (hdac3.Instance->SR & DAC_SR_DMAUDR1) ||
+    if (failed || __HAL_ADC_GET_FLAG(&hadc2, ADC_FLAG_OVR) ||
+        (hdac3.Instance->SR & DAC_SR_DMAUDR1) ||
         hdac3.DMA_Handle1->ErrorCode != HAL_DMA_ERROR_NONE) {
         (void)Sample_Stop();
         return HAL_ERROR;
@@ -146,6 +149,8 @@ void Sample_ReleaseWindow(void) {
 HAL_StatusTypeDef Sample_Stop(void) {
     if (state == SAMPLE_IDLE) return HAL_OK;
     accepting_windows = false;
+    /* Leave the excitation running until the next capture or mute. */
+    (void)HAL_TIM_Base_Stop(&htim3);
     HAL_StatusTypeDef status = HAL_ADC_Stop_DMA(&hadc2);
     if (status == HAL_OK) state = SAMPLE_IDLE;
     return status;
@@ -153,14 +158,14 @@ HAL_StatusTypeDef Sample_Stop(void) {
 
 HAL_StatusTypeDef Sample_MuteDrive(void) {
     if (state != SAMPLE_IDLE) return HAL_BUSY;
-    if (HAL_TIM_Base_Stop(&htim6) != HAL_OK ||
-        HAL_DAC_Stop_DMA(&hdac3, DAC_CHANNEL_1) != HAL_OK ||
+    StopTriggerTimers();
+    if (HAL_DAC_Stop_DMA(&hdac3, DAC_CHANNEL_1) != HAL_OK ||
         HAL_DAC_SetValue(&hdac3, DAC_CHANNEL_1, DAC_ALIGN_12B_R, 2048U) != HAL_OK ||
         HAL_DAC_Start(&hdac3, DAC_CHANNEL_1) != HAL_OK)
         return HAL_ERROR;
     /* Update TRGO transfers the midpoint to DOR once, with DMA disabled. */
-    htim6.Instance->EGR = TIM_EGR_UG;
-    htim6.Instance->SR = ~TIM_SR_UIF;
+    htim2.Instance->EGR = TIM_EGR_UG;
+    htim2.Instance->SR = ~TIM_SR_UIF;
     return HAL_OK;
 }
 

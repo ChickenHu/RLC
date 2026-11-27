@@ -104,6 +104,8 @@ int main(void)
   MX_TIM6_Init();
   MX_TIM1_Init();
   MX_USART2_UART_Init();
+  MX_TIM2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   /* OPAMP1 将 DAC3 的内部信号输出到 PA2 */
   if (HAL_OPAMP_Start(&hopamp1) != HAL_OK)
