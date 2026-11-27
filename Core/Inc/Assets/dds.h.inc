@@ -1,5 +1,16 @@
 
 typedef union {
+    uint16_t value[16];
+    struct {
+        uint8_t low_byte;
+        uint8_t high_byte;
+    } bytes[16];
+} SINE16_t;
+
+extern const SINE16_t SINE_WAVE_16;
+
+
+typedef union {
     uint16_t value[32];
     struct {
         uint8_t low_byte;

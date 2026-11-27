@@ -8,7 +8,8 @@
 
 typedef struct {
     const uint16_t *dds_table;
-    uint16_t dds_points;  // Number of DDS samples per waveform period.
+    uint16_t dds_points;  // DAC and ADC samples per waveform period.
+    uint16_t capture_cycles;  // Settled waveform periods used for I/Q.
     uint16_t tim_arr;
     uint32_t dds_freq;
 } Mode_t;

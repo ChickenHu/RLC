@@ -1,4 +1,11 @@
 
+const SINE16_t SINE_WAVE_16={
+    .bytes={
+        #embed "../../Inc/Assets/sin_table_16.bin"
+    }
+};
+
+
 const SINE32_t SINE_WAVE_32={
     .bytes={
         #embed "../../Inc/Assets/sin_table_32.bin"

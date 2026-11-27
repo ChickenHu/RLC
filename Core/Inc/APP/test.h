@@ -2,11 +2,19 @@
 #include "APP/sync.h"
 #include "stm32g4xx_hal.h"
 
-/* Call after peripheral initialization. Owns TIM6, DAC3 CH1, ADC2 and OLED1.
- * Captures ten periods and displays the last display_cycles (1..10).
- * mode is copied; its DDS table must remain valid. */
-HAL_StatusTypeDef Test_Init(const Mode_t *mode, uint8_t display_cycles,
-                           GPIO_PinState start_pressed_level);
+/* Call after peripheral initialization with a supported mode.
+ * START selects a frequency and range automatically and displays impedance.
+ * OPEN and SHORT acquire the corresponding standard at all enabled frequencies.
+ * START cancels an ongoing calibration. */
+HAL_StatusTypeDef Test_Init(const Mode_t *mode, GPIO_PinState start_pressed_level);
+/* After both calibration sweeps, START cycles frequency, OPEN lowers the
+ * range, and SHORT raises it. Each key measures with the selected settings.
+ * Hold START to toggle automatic adjustment, then tap START to measure.
+ * While calibrating, press the same standard key again to skip a stalled range. */
+HAL_StatusTypeDef ManualTest_Init(const Mode_t *mode, GPIO_PinState start_pressed_level);
+/* Plot two consecutive ADC periods per channel. START cycles frequency,
+ * OPEN lowers the range, and SHORT raises it. Starts at G1. */
+HAL_StatusTypeDef WaveformTest_Init(const Mode_t *mode, GPIO_PinState start_pressed_level);
 /* Call frequently in the main loop. HAL_BUSY means acquisition is pending.
- * HAL_ERROR/HAL_TIMEOUT leave the last successful plot intact. */
+ * HAL_ERROR/HAL_TIMEOUT show a failure status with any available waveforms. */
 HAL_StatusTypeDef Test_Update(void);

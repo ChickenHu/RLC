@@ -30,7 +30,7 @@
 /* USER CODE BEGIN Includes */
 
 #include "BSP/dds.h"
-#include "APP/test.h"
+#include "APP/measurement.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -101,29 +101,28 @@ int main(void)
   MX_I2C1_Init();
   MX_OPAMP1_Init();
   MX_TIM6_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   /* OPAMP1 将 DAC3 的内部信号输出到 PA2 */
   if (HAL_OPAMP_Start(&hopamp1) != HAL_OK)
   {
       Error_Handler();
   }
-  htim6.Instance->ARR=49;
-  /* 启动 DMA，等待定时器触发 */
-  if (HAL_DAC_Start_DMA(&hdac3,
-                        DAC_CHANNEL_1,
-                        (uint32_t *)SINE_WAVE_32.value,
-                        32,
-                        DAC_ALIGN_12B_R) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  /* Q2–Q8 invert the MCU outputs. Keep U4 disabled while selecting
+     G1 (RB1_5/RB0_5 = 00) and the 100 Hz filter (FB1_5/FB0_5 = 00). */
+  HAL_GPIO_WritePin(RELAY_EN_GPIO_Port, RELAY_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(RB0_GPIO_Port, RB0_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(RB1_GPIO_Port, RB1_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(FB0_GPIO_Port, FB0_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(FB1_GPIO_Port, FB1_Pin, GPIO_PIN_SET);
 
-  /* 启动 TIM6，按固定速率输出 */
-  if (HAL_TIM_Base_Start(&htim6) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (Test_Init(&Mode1, 3, GPIO_PIN_RESET) != HAL_OK)
+  /* PATH_5 = 1 selects I_D, LEVEL_5 = 0 routes FILT to ADC2. */
+  HAL_GPIO_WritePin(PATH_GPIO_Port, PATH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LEVEL_GPIO_Port, LEVEL_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(R_INH_GPIO_Port, R_INH_Pin, GPIO_PIN_SET);
+
+  /* Calibrate at startup, then select the frequency and range with the keys. */
+  if (Measurement_Init(&Mode2, GPIO_PIN_RESET) != HAL_OK)
   {
     Error_Handler();
   }
@@ -136,7 +135,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    (void)Test_Update();
+    (void)Measurement_Update();
   }
   /* USER CODE END 3 */
 }

@@ -5,11 +5,12 @@ from pathlib import Path
 
 # TH06 PDF, page 3: timer clock 160 MHz, PSC = 0.
 TIMER_CLOCK_HZ = 160_000_000
+TARGET_CAPTURE_SAMPLES = 2048
 MODES = [
     ("Mode1", 2, 256),
     ("Mode2", 3, 160),
     ("Mode3", 4, 80),
-    ("Mode4", 5, 32),
+    ("Mode4", 5, 16),
 ]
 
 H_TEMPLATE = "extern const Mode_t {name};\n"
@@ -17,6 +18,7 @@ C_TEMPLATE = """
 const Mode_t {name} = {{
     .dds_table = SINE_WAVE_{points}.value,
     .dds_points = {points},
+    .capture_cycles = {capture_cycles},
     .tim_arr = {arr},
     .dds_freq = FREQ_1E{exponent},
 }};
@@ -32,9 +34,10 @@ def main():
         if remainder or not 1 <= period <= 65536:
             raise ValueError(f"{name}: frequency requires an invalid timer period")
         header.append(H_TEMPLATE.format(name=name))
-        source.append(C_TEMPLATE.format(
-            name=name, points=points, arr=period - 1, exponent=exponent
-        ))
+        capture_cycles = (TARGET_CAPTURE_SAMPLES + points - 1) // points
+        source.append(C_TEMPLATE.format(name=name, points=points,
+                                        capture_cycles=capture_cycles,
+                                        arr=period - 1, exponent=exponent))
 
     assets = Path(__file__).resolve().parents[1] / "Core/Inc/Assets"
     assets.mkdir(parents=True, exist_ok=True)
