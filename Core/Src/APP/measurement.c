@@ -63,8 +63,12 @@ static bool waveform_only, capture_settled;
 static bool manual_test, manual_ready, open_sweep_done, short_sweep_done;
 static bool automatic_adjustment, start_hold_handled, adjustment_toggle_pending;
 static uint32_t start_pressed_at;
-static bool manual_frequency_used;
-static MeasurementRange manual_range;
+static MeasurementRange manual_range, manual_high_frequency_range;
+typedef struct {
+    uint32_t started_at;
+    bool tracking;
+} RangeKeyHold;
+static RangeKeyHold open_hold, short_hold;
 static uint32_t capture_started_at;
 static SampleSource source;
 static Complex voltage_phasor;
@@ -167,19 +171,22 @@ static void DrawAdjustmentMode(void) {
     DrawTextAt(100U, y, automatic_adjustment ? "AUTO" : "MAN");
 }
 
+static MeasurementRange *ManualRange(void) {
+    return compact_ui && manual_frequency_index == MODE_100_KHZ ?
+           &manual_high_frequency_range : &manual_range;
+}
+
 static void DrawManualSelection(void) {
     OLED_Clear(&OLED1);
     DrawAdjustmentMode();
     DrawCentered(21U, FrequencyLabel(modes[manual_frequency_index]->dds_freq), 3U);
+    char range[] = {'G', '0' + *ManualRange(), '\0'};
+    DrawScaledText(104U, 50U, range, 2U);
     OLED_UpdateState(&OLED1);
 }
 
 static bool UsesManualAdjustment(void) {
     return manual_ready && !automatic_adjustment;
-}
-
-static bool UsesFixedRange(void) {
-    return UsesManualAdjustment() && !compact_ui;
 }
 
 static void DrawCapture(uint8_t top_y, uint8_t bottom_y) {
@@ -400,10 +407,10 @@ static HAL_StatusTypeDef StartFrequency(void) {
     range_index = 0U;
     tried_ranges = 0U;
     active_range = waveform_only ? selected_range : range_order[range_index];
-    if (UsesFixedRange()) active_range = manual_range;
+    if (UsesManualAdjustment()) active_range = *ManualRange();
     else if (!waveform_only && operation == TEST_MEASURE && PreferredRange() < RANGE_COUNT)
         active_range = PreferredRange();
-    if (!waveform_only && !UsesFixedRange() && !CanScanRange(active_range)) {
+    if (!waveform_only && !UsesManualAdjustment() && !CanScanRange(active_range)) {
         active_range = RANGE_G1;
         while (active_range <= RANGE_G3 && !CanScanRange(active_range)) ++active_range;
         if (active_range > RANGE_G3) {
@@ -511,7 +518,7 @@ static HAL_StatusTypeDef FinishFrequency(void) {
 }
 
 static HAL_StatusTypeDef NextRange(void) {
-    if (UsesFixedRange()) {
+    if (UsesManualAdjustment()) {
         DrawStatus(range_failure ? range_failure : "L");
         return HAL_ERROR;
     }
@@ -743,7 +750,7 @@ static HAL_StatusTypeDef FinishCapture(void) {
     bool valid = calibrated ? Calc_CorrectImpedance(cal, voltage_phasor, phasor, &impedance, &signal) :
                               Calc_Impedance(voltage_phasor, phasor, test_mode.dds_freq,
                                              active_range, &impedance);
-    if (!UsesFixedRange() && route.range == RANGE_COUNT) {
+    if (!UsesManualAdjustment() && route.range == RANGE_COUNT) {
         Complex estimate = impedance;
         if (fminf(voltage_peak, current_peak) >= MIN_PILOT_CODES &&
             (valid || Calc_Impedance(voltage_phasor, phasor, test_mode.dds_freq,
@@ -765,7 +772,7 @@ static HAL_StatusTypeDef FinishCapture(void) {
     float angle = atan2f(impedance.im, impedance.re) * (360.0f / TWO_PI);
     if (fabsf(angle) > MAX_PASSIVE_ANGLE_DEG) return NextRange();
     bool preferred = active_range == PreferredRange();
-    float min_signal = active_mode == MODE_100_KHZ && !UsesFixedRange() ?
+    float min_signal = active_mode == MODE_100_KHZ && !UsesManualAdjustment() ?
                        MIN_100_KHZ_SIGNAL_CODES : MIN_SIGNAL_CODES;
     if (signal < min_signal || (!preferred && signal <= best_signal)) return NextRange();
     best_signal = signal;
@@ -798,7 +805,7 @@ static HAL_StatusTypeDef FinishCapture(void) {
     have_result = true;
     result_rank = rank;
     result_signal = signal;
-    if (UsesFixedRange()) return ShowMeasurement();
+    if (UsesManualAdjustment()) return ShowMeasurement();
     return preferred ? FinishFrequency() : NextRange();
 }
 
@@ -820,17 +827,11 @@ static HAL_StatusTypeDef Init(const Mode_t *mode, GPIO_PinState start_pressed_le
     manual_ready = open_sweep_done = short_sweep_done = false;
     automatic_adjustment = use_compact_ui;
     start_hold_handled = adjustment_toggle_pending = false;
-    manual_frequency_used = false;
-    if (compact_ui) {
-        manual_frequency_index = next_mode;
-    } else if (manual_test) {
-        manual_frequency_index = 0U;
-        while (manual_frequency_index < MODE_COUNT &&
-               frequency_order[manual_frequency_index] != next_mode)
-            ++manual_frequency_index;
-        if (manual_frequency_index == MODE_COUNT) return HAL_ERROR;
-    }
+    manual_frequency_index = next_mode;
     manual_range = RANGE_G1;
+    manual_high_frequency_range = RANGE_G1;
+    open_hold = (RangeKeyHold){0};
+    short_hold = (RangeKeyHold){0};
     selected_range = RANGE_G1;
     if (!waveform_only) {
         for (uint8_t i = 0U; i < MODE_COUNT; ++i)
@@ -882,11 +883,39 @@ static bool StartTriggered(void) {
     return was_pressed && !start_pressed && !start_hold_handled;
 }
 
+static bool RangeKeyTriggered(KEY_HandleTypeDef *key, bool *was_pressed,
+                              RangeKeyHold *hold, bool *measure) {
+    if (!UsesManualAdjustment()) {
+        hold->tracking = false;
+        return KeyTriggered(key, was_pressed);
+    }
+    bool previous = *was_pressed;
+    bool pressed = KEY_IsPressed(key);
+    *was_pressed = pressed;
+    uint32_t now = HAL_GetTick();
+    if (pressed && !previous) {
+        hold->started_at = now;
+        hold->tracking = true;
+    }
+    if (!hold->tracking) return false;
+    if ((uint32_t)(now - hold->started_at) >= START_HOLD_MS) {
+        hold->tracking = false;
+        *measure = true;
+        return false;
+    }
+    if (!pressed) {
+        hold->tracking = false;
+        return true;
+    }
+    return false;
+}
+
 HAL_StatusTypeDef Measurement_Update(void) {
     if (!initialized) return HAL_ERROR;
     bool start = StartTriggered();
-    bool open = KeyTriggered(&open_key, &open_pressed);
-    bool shorted = KeyTriggered(&short_key, &short_pressed);
+    bool measure = false;
+    bool open = RangeKeyTriggered(&open_key, &open_pressed, &open_hold, &measure);
+    bool shorted = RangeKeyTriggered(&short_key, &short_pressed, &short_hold, &measure);
     if (busy) {
         bool calibrating = operation != TEST_MEASURE;
         if (calibrating && start) {
@@ -913,7 +942,7 @@ HAL_StatusTypeDef Measurement_Update(void) {
             RecordRangeFailure(source == SAMPLE_DUT_VOLTAGE ? "US" : "IS");
             return NextRange();
         }
-        if (status == HAL_TIMEOUT && !waveform_only && !UsesFixedRange() &&
+        if (status == HAL_TIMEOUT && !waveform_only && !UsesManualAdjustment() &&
             active_mode == MODE_100_KHZ) {
             RecordRangeFailure("T");
             return NextRange();
@@ -930,7 +959,7 @@ HAL_StatusTypeDef Measurement_Update(void) {
     if (adjustment_toggle_pending) {
         adjustment_toggle_pending = false;
         automatic_adjustment = !automatic_adjustment;
-        if (compact_ui && UsesManualAdjustment()) {
+        if (UsesManualAdjustment()) {
             DrawManualSelection();
             return HAL_OK;
         }
@@ -939,15 +968,21 @@ HAL_StatusTypeDef Measurement_Update(void) {
         OLED_UpdateState(&OLED1);
         return HAL_OK;
     }
-    if (start || open || shorted) {
+    if (start || open || shorted || measure) {
         if (manual_test && !manual_ready && !open && !shorted) return HAL_OK;
-        if (compact_ui && UsesManualAdjustment() && !start) {
-            manual_frequency_index = (manual_frequency_index + (open ? MODE_COUNT - 1U : 1U)) %
-                                     MODE_COUNT;
+        if (UsesManualAdjustment() && !measure) {
+            if (start) {
+                manual_frequency_index = (manual_frequency_index + 1U) % MODE_COUNT;
+            } else {
+                bool limited = compact_ui && manual_frequency_index == MODE_100_KHZ;
+                MeasurementRange *range = ManualRange();
+                if (open && *range > (limited ? RANGE_G1 : RANGE_G0)) --*range;
+                else if (shorted && *range < (limited ? RANGE_G3 : RANGE_G4)) ++*range;
+            }
             DrawManualSelection();
             return HAL_OK;
         }
-        if (manual_ready && (compact_ui || automatic_adjustment) && !start) return HAL_OK;
+        if (manual_ready && automatic_adjustment && !start) return HAL_OK;
         bool measuring = waveform_only || manual_ready || (!manual_test && start);
         operation = measuring ? TEST_MEASURE : open ? TEST_OPEN : TEST_SHORT;
         have_result = false;
@@ -959,15 +994,8 @@ HAL_StatusTypeDef Measurement_Update(void) {
         high_frequency_range = RANGE_G1;
         recorded_ranges = 0U;
         calibration_failure = NULL;
-        if (compact_ui && UsesManualAdjustment()) {
+        if (UsesManualAdjustment()) {
             active_mode = manual_frequency_index;
-        } else if (UsesManualAdjustment()) {
-            if (start && manual_frequency_used)
-                manual_frequency_index = (manual_frequency_index + 1U) % MODE_COUNT;
-            active_mode = frequency_order[manual_frequency_index];
-            if (!start && open && manual_range > RANGE_G0) --manual_range;
-            else if (!start && shorted && manual_range < RANGE_G4) ++manual_range;
-            manual_frequency_used = true;
         } else if (!waveform_only) {
             if (operation == TEST_OPEN) open_sweep_done = false;
             if (operation == TEST_SHORT) short_sweep_done = false;

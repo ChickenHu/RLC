@@ -8,8 +8,8 @@
  * START cancels an ongoing calibration. */
 HAL_StatusTypeDef Test_Init(const Mode_t *mode, GPIO_PinState start_pressed_level);
 /* After both calibration sweeps, START cycles frequency, OPEN lowers the
- * range, and SHORT raises it. Each key measures with the selected settings.
- * Hold START to toggle automatic adjustment, then tap START to measure.
+ * range, and SHORT raises it. Hold OPEN or SHORT to measure.
+ * Hold START to toggle automatic adjustment. In AUTO, tap START to measure.
  * While calibrating, press the same standard key again to skip a stalled range. */
 HAL_StatusTypeDef ManualTest_Init(const Mode_t *mode, GPIO_PinState start_pressed_level);
 /* Plot two consecutive ADC periods per channel. START cycles frequency,
