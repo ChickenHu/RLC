@@ -10,7 +10,7 @@ MODES = [
     ("Mode1", 2, 256),
     ("Mode2", 3, 160),
     ("Mode3", 4, 80),
-    ("Mode4", 5, 16),
+    ("Mode4", 5, 20),
 ]
 
 H_TEMPLATE = "extern const Mode_t {name};\n"

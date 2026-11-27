@@ -24,6 +24,7 @@
 #include "i2c.h"
 #include "opamp.h"
 #include "tim.h"
+#include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -102,6 +103,7 @@ int main(void)
   MX_OPAMP1_Init();
   MX_TIM6_Init();
   MX_TIM1_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   /* OPAMP1 将 DAC3 的内部信号输出到 PA2 */
   if (HAL_OPAMP_Start(&hopamp1) != HAL_OK)
@@ -118,10 +120,10 @@ int main(void)
 
   /* PATH_5 = 1 selects I_D, LEVEL_5 = 0 routes FILT to ADC2. */
   HAL_GPIO_WritePin(PATH_GPIO_Port, PATH_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LEVEL_GPIO_Port, LEVEL_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LEVEL_GPIO_Port, LEVEL_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(R_INH_GPIO_Port, R_INH_Pin, GPIO_PIN_SET);
 
-  /* Calibrate at startup, then select the frequency and range with the keys. */
+  /* Calibrate at startup, then enter the production measurement interface. */
   if (Measurement_Init(&Mode2, GPIO_PIN_RESET) != HAL_OK)
   {
     Error_Handler();

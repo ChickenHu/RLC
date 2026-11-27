@@ -75,6 +75,11 @@ static Complex CurrentScale(uint32_t freq_hz, MeasurementRange range) {
     return (Complex){-2.0f * conductance, -2.0f * susceptance};
 }
 
+float Calc_FeedbackMagnitude(uint32_t freq_hz, MeasurementRange range) {
+    if ((unsigned)range >= RANGE_COUNT) return 0.0f;
+    return 2.0f / sqrtf(Power(CurrentScale(freq_hz, range)));
+}
+
 bool Calc_Impedance(Complex voltage, Complex current, uint32_t freq_hz,
                     MeasurementRange range, Complex *impedance) {
     if (!impedance || !freq_hz || (unsigned)range >= RANGE_COUNT || Power(voltage) < 1.0f)

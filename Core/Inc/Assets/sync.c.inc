@@ -25,9 +25,9 @@ const Mode_t Mode3 = {
 };
 
 const Mode_t Mode4 = {
-    .dds_table = SINE_WAVE_16.value,
-    .dds_points = 16,
-    .capture_cycles = 128,
-    .tim_arr = 99,
+    .dds_table = SINE_WAVE_20.value,
+    .dds_points = 20,
+    .capture_cycles = 103,
+    .tim_arr = 79,
     .dds_freq = FREQ_1E5,
 };

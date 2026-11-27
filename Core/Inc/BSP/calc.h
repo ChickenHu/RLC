@@ -22,6 +22,9 @@ typedef enum {
     RANGE_G0, RANGE_G1, RANGE_G2, RANGE_G3, RANGE_G4, RANGE_COUNT
 } MeasurementRange;
 
+/* Magnitude of the nominal feedback impedance, including the permanent path. */
+float Calc_FeedbackMagnitude(uint32_t freq_hz, MeasurementRange range);
+
 /* Nominal impedance in ohms from phase-aligned ADC phasors.
  * Returns false if either fundamental peak is below one ADC code. */
 bool Calc_Impedance(Complex voltage, Complex current, uint32_t freq_hz,

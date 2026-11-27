@@ -6,6 +6,13 @@ const SINE16_t SINE_WAVE_16={
 };
 
 
+const SINE20_t SINE_WAVE_20={
+    .bytes={
+        #embed "../../Inc/Assets/sin_table_20.bin"
+    }
+};
+
+
 const SINE32_t SINE_WAVE_32={
     .bytes={
         #embed "../../Inc/Assets/sin_table_32.bin"

@@ -80,6 +80,16 @@ HAL_StatusTypeDef Sample_Start(const Mode_t *mode, SampleSource source,
     if (HAL_TIM_Base_Stop(&htim6) != HAL_OK) return HAL_ERROR;
     if (HAL_DAC_Stop_DMA(&hdac3, DAC_CHANNEL_1) != HAL_OK) return HAL_ERROR;
 
+    ADC_ChannelConfTypeDef channel = {
+        .Channel = ADC_CHANNEL_3,
+        .Rank = ADC_REGULAR_RANK_1,
+        .SamplingTime = mode->dds_freq == FREQ_1E5 ? ADC_SAMPLETIME_2CYCLES_5 :
+                                                   ADC_SAMPLETIME_6CYCLES_5,
+        .SingleDiff = ADC_SINGLE_ENDED,
+        .OffsetNumber = ADC_OFFSET_NONE,
+    };
+    if (HAL_ADC_ConfigChannel(&hadc2, &channel) != HAL_OK) return HAL_ERROR;
+
     /* UG also emits TRGO. Issue it before arming either DMA. */
     TIM_TypeDef *tim = htim6.Instance;
     tim->ARR = mode->tim_arr;

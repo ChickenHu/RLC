@@ -23,7 +23,7 @@ const SINE{}_t SINE_WAVE_{}={{
 with open("Core/Inc/Assets/dds.h.inc", "w") as header, open(
     "Core/Inc/Assets/dds.c.inc", "w"
 ) as source:
-    for POINT_NUM in [16, 32, 80, 160, 256]:
+    for POINT_NUM in [16, 20, 32, 80, 160, 256]:
         header.write(
             H_TEMPLATE.format(POINT_NUM, POINT_NUM, POINT_NUM, POINT_NUM, POINT_NUM)
             + "\r\n"

@@ -47,6 +47,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_custom_target(generate_dds_assets
     BYPRODUCTS
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc/Assets/sin_table_16.bin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc/Assets/sin_table_20.bin"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc/Assets/sin_table_32.bin"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc/Assets/sin_table_80.bin"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc/Assets/sin_table_160.bin"

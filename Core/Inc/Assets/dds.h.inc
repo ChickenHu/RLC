@@ -11,6 +11,17 @@ extern const SINE16_t SINE_WAVE_16;
 
 
 typedef union {
+    uint16_t value[20];
+    struct {
+        uint8_t low_byte;
+        uint8_t high_byte;
+    } bytes[20];
+} SINE20_t;
+
+extern const SINE20_t SINE_WAVE_20;
+
+
+typedef union {
     uint16_t value[32];
     struct {
         uint8_t low_byte;

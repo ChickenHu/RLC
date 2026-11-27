@@ -12,23 +12,24 @@ enum {
     PLOT_WIDTH = 76, PLOT_GROUPS = 6, PLOT_MARGIN = 2, RESULT_X = 82,
     CAPTURE_BUFFER_SAMPLES = 8704,
     MIN_SIGNAL_CODES = 8, ADC_RAIL_MARGIN = 8,
-    MIN_PILOT_CODES = 4,
+    MIN_PILOT_CODES = 4, MIN_100_KHZ_SIGNAL_CODES = 32,
     WAVEFORM_SETTLE_MS = 30, WAVEFORM_PERIODS = 2,
-    MODE3_SETTLE_MS = 30, MODE3_AVERAGE_WINDOWS = 8,
+    HIGH_FREQ_SETTLE_MS = 30, HIGH_FREQ_AVERAGE_WINDOWS = 8,
     MEASUREMENT_CAPTURE_TIMEOUT_MS = 1000,
     START_HOLD_MS = 700,
     RELAY_SETTLE_MS = 20,
     RESISTIVE_ANGLE_DEG = 5, MAX_PASSIVE_ANGLE_DEG = 100,
 };
 static Mode_t test_mode;
-/* Enable only the three frequencies used for the 1 nF–1 uF target. */
-enum { MODE_100_HZ, MODE_1_KHZ, MODE_10_KHZ };
+enum { MODE_100_HZ, MODE_1_KHZ, MODE_10_KHZ, MODE_100_KHZ, MODE_COUNT };
 static const Mode_t *const modes[] = {
     [MODE_100_HZ] = &Mode1, [MODE_1_KHZ] = &Mode2, [MODE_10_KHZ] = &Mode3,
+    [MODE_100_KHZ] = &Mode4,
 };
-enum { MODE_COUNT = sizeof(modes) / sizeof(modes[0]) };
-/* Start at 1 kHz, then try 100 Hz before the less reliable 10 kHz. */
-static const uint8_t frequency_order[MODE_COUNT] = {MODE_1_KHZ, MODE_100_HZ, MODE_10_KHZ};
+/* Use 100 kHz as the last automatic fallback. */
+static const uint8_t frequency_order[MODE_COUNT] = {
+    MODE_1_KHZ, MODE_100_HZ, MODE_10_KHZ, MODE_100_KHZ,
+};
 typedef enum { TEST_MEASURE, TEST_OPEN, TEST_SHORT } TestOperation;
 static CalcCalibration calibration[MODE_COUNT][RANGE_COUNT];
 static TestOperation operation;
@@ -37,7 +38,7 @@ static uint8_t frequency_index, manual_frequency_index;
 static const MeasurementRange range_order[RANGE_COUNT] = {
     RANGE_G1, RANGE_G0, RANGE_G2, RANGE_G3, RANGE_G4
 };
-static MeasurementRange active_range, selected_range;
+static MeasurementRange active_range, selected_range, high_frequency_range;
 static unsigned range_index;
 static unsigned tried_ranges, result_rank;
 static unsigned tried_frequencies;
@@ -63,7 +64,7 @@ static bool manual_test, manual_ready, open_sweep_done, short_sweep_done;
 static bool automatic_adjustment, start_hold_handled, adjustment_toggle_pending;
 static uint32_t start_pressed_at;
 static bool manual_frequency_used;
-static MeasurementRange manual_range;
+static MeasurementRange manual_range, manual_high_frequency_range;
 static uint32_t capture_started_at;
 static SampleSource source;
 static Complex voltage_phasor;
@@ -131,7 +132,8 @@ static void DrawMeasurementInProgress(void) {
 static void DrawMeasurementSettings(void) {
     char range[] = {'G', '0' + active_range, '\0'};
     const char *frequency = test_mode.dds_freq == FREQ_1E2 ? "100 Hz" :
-                            test_mode.dds_freq == FREQ_1E3 ? "1 kHz" : "10 kHz";
+                            test_mode.dds_freq == FREQ_1E3 ? "1 kHz" :
+                            test_mode.dds_freq == FREQ_1E4 ? "10 kHz" : "100 kHz";
     DrawScaledText(8U, 50U, frequency, 2U);
     DrawScaledText(104U, 50U, range, 2U);
 }
@@ -354,7 +356,19 @@ static HAL_StatusTypeDef StartRange(void) {
 }
 
 static MeasurementRange PreferredRange(void) {
+    if (active_mode == MODE_100_KHZ) return high_frequency_range;
     return active_mode == route.alternate_mode ? route.alternate_range : route.range;
+}
+
+static bool HasCalibration(uint8_t mode, MeasurementRange range) {
+    const CalcCalibration *cal = &calibration[mode][range];
+    return cal->has_open && cal->has_short;
+}
+
+static bool CanScanRange(MeasurementRange range) {
+    if (active_mode != MODE_100_KHZ) return true;
+    if (range < RANGE_G1 || range > RANGE_G3) return false;
+    return operation != TEST_MEASURE || HasCalibration(active_mode, range);
 }
 
 static HAL_StatusTypeDef StartFrequency(void) {
@@ -363,9 +377,20 @@ static HAL_StatusTypeDef StartFrequency(void) {
     range_index = 0U;
     tried_ranges = 0U;
     active_range = waveform_only ? selected_range : range_order[range_index];
-    if (UsesManualAdjustment()) active_range = manual_range;
+    if (UsesManualAdjustment())
+        active_range = compact_ui && active_mode == MODE_100_KHZ ?
+                       manual_high_frequency_range : manual_range;
     else if (!waveform_only && operation == TEST_MEASURE && PreferredRange() < RANGE_COUNT)
         active_range = PreferredRange();
+    if (!waveform_only && !UsesManualAdjustment() && !CanScanRange(active_range)) {
+        active_range = RANGE_G1;
+        while (active_range <= RANGE_G3 && !CanScanRange(active_range)) ++active_range;
+        if (active_range > RANGE_G3) {
+            DrawStatus("E");
+            return HAL_ERROR;
+        }
+        if (operation == TEST_MEASURE) high_frequency_range = active_range;
+    }
     best_signal = 0.0f;
     preferred_at_frequency = false;
     range_failure = NULL;
@@ -401,7 +426,7 @@ static void RecordRangeFailure(const char *reason) {
 static bool HasCalibratedRange(void) {
     for (uint8_t mode = 0U; mode < MODE_COUNT; ++mode) {
         for (MeasurementRange range = RANGE_G0; range < RANGE_COUNT; ++range) {
-            if (calibration[mode][range].has_open && calibration[mode][range].has_short)
+            if (HasCalibration(mode, range))
                 return true;
         }
     }
@@ -410,11 +435,14 @@ static bool HasCalibratedRange(void) {
 
 static HAL_StatusTypeDef NextFrequency(void) {
     if (operation == TEST_MEASURE) {
-        const uint8_t candidates[] = {route.mode, route.alternate_mode,
-                                      frequency_order[0], frequency_order[1], frequency_order[2]};
-        for (unsigned i = 0U; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
-            uint8_t mode = candidates[i];
+        const uint8_t priority[] = {route.mode, route.alternate_mode};
+        unsigned priority_count = sizeof(priority) / sizeof(priority[0]);
+        for (unsigned i = 0U; i < priority_count + MODE_COUNT; ++i) {
+            uint8_t mode = i < priority_count ? priority[i] : frequency_order[i - priority_count];
             if (mode >= MODE_COUNT || (tried_frequencies & (1U << mode))) continue;
+            if (mode == MODE_100_KHZ &&
+                !HasCalibration(mode, RANGE_G1) && !HasCalibration(mode, RANGE_G2) &&
+                !HasCalibration(mode, RANGE_G3)) continue;
             active_mode = mode;
             return StartFrequency();
         }
@@ -423,7 +451,7 @@ static HAL_StatusTypeDef NextFrequency(void) {
         return StartFrequency();
     }
     if (operation != TEST_MEASURE) {
-        bool complete = recorded_ranges == MODE_COUNT * RANGE_COUNT;
+        bool complete = recorded_ranges == (MODE_COUNT - 1U) * RANGE_COUNT + 3U;
         if (manual_test) {
             if (operation == TEST_OPEN) open_sweep_done = recorded_ranges > 0U;
             else short_sweep_done = recorded_ranges > 0U;
@@ -468,24 +496,27 @@ static HAL_StatusTypeDef NextRange(void) {
     }
     if (operation == TEST_MEASURE) {
         MeasurementRange preferred = PreferredRange();
-        if (preferred < RANGE_COUNT && !(tried_ranges & (1U << preferred))) {
+        if (preferred < RANGE_COUNT && CanScanRange(preferred) &&
+            !(tried_ranges & (1U << preferred))) {
             active_range = preferred;
             return StartRange();
         }
         /* With no usable estimate yet, increase current gain before G0. */
         for (MeasurementRange range = RANGE_G1; range < RANGE_COUNT; ++range) {
-            if (tried_ranges & (1U << range)) continue;
+            if (!CanScanRange(range) || (tried_ranges & (1U << range))) continue;
             active_range = range;
             return StartRange();
         }
-        if (!(tried_ranges & (1U << RANGE_G0))) {
+        if (CanScanRange(RANGE_G0) && !(tried_ranges & (1U << RANGE_G0))) {
             active_range = RANGE_G0;
             return StartRange();
         }
         return FinishFrequency();
     }
-    if (range_index + 1U < RANGE_COUNT) {
-        active_range = range_order[++range_index];
+    while (range_index + 1U < RANGE_COUNT) {
+        MeasurementRange range = range_order[++range_index];
+        if (!CanScanRange(range)) continue;
+        active_range = range;
         return StartRange();
     }
     return FinishFrequency();
@@ -497,6 +528,28 @@ static MeasurementRange RangeForImpedance(float magnitude) {
     if (magnitude < 3162.0f) return RANGE_G2;
     if (magnitude < 31623.0f) return RANGE_G3;
     return RANGE_G4;
+}
+
+static MeasurementRange RangeFor100kHz(Complex impedance, uint32_t frequency, float angle) {
+    static const float series_resistance[] = {680.0f, 4700.0f, 47000.0f};
+    float resistance = fmaxf(0.0f, impedance.re);
+    float ratio = (float)FREQ_1E5 / (float)frequency;
+    float reactance = angle > RESISTIVE_ANGLE_DEG ? impedance.im * ratio :
+                      angle < -RESISTIVE_ANGLE_DEG ? impedance.im / ratio : 0.0f;
+    float dut_magnitude = hypotf(resistance, reactance);
+    float best_score = -1.0f;
+    MeasurementRange best = RANGE_G1;
+    for (MeasurementRange range = RANGE_G1; range <= RANGE_G3; ++range) {
+        if (!HasCalibration(MODE_100_KHZ, range)) continue;
+        float source_path = hypotf(series_resistance[range - RANGE_G1] + resistance, reactance);
+        float feedback = Calc_FeedbackMagnitude(FREQ_1E5, range);
+        float score = fminf(2.0f * dut_magnitude, feedback) / source_path;
+        if (score > best_score) {
+            best = range;
+            best_score = score;
+        }
+    }
+    return best;
 }
 
 static MeasurementRoute RouteForImpedance(Complex impedance, uint32_t frequency) {
@@ -576,8 +629,8 @@ static HAL_StatusTypeDef FinishCapture(void) {
     bool calibrating = operation != TEST_MEASURE;
     float stability_floor = calibrating ? 4.0f : 2.0f;
     float stability_relative = calibrating ? 0.04f : 0.02f;
-    bool average_windows = test_mode.dds_freq == FREQ_1E4;
-    if (average_windows && !CaptureAfterSettling(MODE3_SETTLE_MS))
+    bool average_windows = test_mode.dds_freq >= FREQ_1E4;
+    if (average_windows && !CaptureAfterSettling(HIGH_FREQ_SETTLE_MS))
         return HAL_BUSY;
     uint32_t points = test_mode.dds_points;
     uint32_t cycles = test_mode.capture_cycles;
@@ -601,18 +654,17 @@ static HAL_StatusTypeDef FinishCapture(void) {
     }
     float mean = (float)sum / (float)count;
     if (average_windows && !clipped) {
-        /* At 10 kHz, compare independent averages of coherent windows so
-         * noise from an individual 2.6 ms window does not dominate. */
+        /* Compare groups of coherent windows at the higher frequencies. */
         batch_phasor_sum.re += phasor.re;
         batch_phasor_sum.im += phasor.im;
         batch_mean_sum += mean;
-        if (++batch_windows < MODE3_AVERAGE_WINDOWS) {
+        if (++batch_windows < HIGH_FREQ_AVERAGE_WINDOWS) {
             Sample_ReleaseWindow();
             return HAL_BUSY;
         }
-        phasor.re = batch_phasor_sum.re / MODE3_AVERAGE_WINDOWS;
-        phasor.im = batch_phasor_sum.im / MODE3_AVERAGE_WINDOWS;
-        mean = batch_mean_sum / MODE3_AVERAGE_WINDOWS;
+        phasor.re = batch_phasor_sum.re / HIGH_FREQ_AVERAGE_WINDOWS;
+        phasor.im = batch_phasor_sum.im / HIGH_FREQ_AVERAGE_WINDOWS;
+        mean = batch_mean_sum / HIGH_FREQ_AVERAGE_WINDOWS;
         batch_windows = 0U;
         batch_phasor_sum = (Complex){0};
         batch_mean_sum = 0.0f;
@@ -677,11 +729,13 @@ static HAL_StatusTypeDef FinishCapture(void) {
             (valid || Calc_Impedance(voltage_phasor, phasor, test_mode.dds_freq,
                                     active_range, &estimate))) {
             float estimate_angle = atan2f(estimate.im, estimate.re) * (360.0f / TWO_PI);
-            if (fabsf(estimate_angle) <= MAX_PASSIVE_ANGLE_DEG)
+            if (fabsf(estimate_angle) <= MAX_PASSIVE_ANGLE_DEG) {
                 route = RouteForImpedance(estimate, test_mode.dds_freq);
+                high_frequency_range = RangeFor100kHz(estimate, test_mode.dds_freq, estimate_angle);
+            }
         } else if (voltage_peak < MIN_PILOT_CODES && current_peak >= MIN_SIGNAL_CODES) {
             /* A weak voltage can identify the low range before R/L/C is known. */
-            if (!(tried_ranges & (1U << RANGE_G0))) {
+            if (CanScanRange(RANGE_G0) && !(tried_ranges & (1U << RANGE_G0))) {
                 active_range = RANGE_G0;
                 return StartRange();
             }
@@ -691,16 +745,19 @@ static HAL_StatusTypeDef FinishCapture(void) {
     float angle = atan2f(impedance.im, impedance.re) * (360.0f / TWO_PI);
     if (fabsf(angle) > MAX_PASSIVE_ANGLE_DEG) return NextRange();
     bool preferred = active_range == PreferredRange();
-    if (signal < MIN_SIGNAL_CODES || (!preferred && signal <= best_signal)) return NextRange();
+    float min_signal = active_mode == MODE_100_KHZ && !UsesManualAdjustment() ?
+                       MIN_100_KHZ_SIGNAL_CODES : MIN_SIGNAL_CODES;
+    if (signal < min_signal || (!preferred && signal <= best_signal)) return NextRange();
     best_signal = signal;
     preferred_at_frequency = preferred;
     unsigned rank = calibrated ? 1U : 0U;
-    if (preferred) {
+    if (preferred && active_mode != MODE_100_KHZ) {
         rank += active_mode == route.mode ? 6U :
                 active_mode == route.alternate_mode ? 4U : 2U;
     }
     if (have_result && (rank < result_rank ||
-        (!preferred && rank == result_rank && signal <= result_signal)))
+        (rank == result_rank && (active_mode == MODE_100_KHZ ||
+                                 (!preferred && signal <= result_signal)))))
         return preferred ? FinishFrequency() : NextRange();
     if (compact_ui) {
         OLED_Clear(&OLED1);
@@ -740,7 +797,8 @@ static HAL_StatusTypeDef Init(const Mode_t *mode, GPIO_PinState start_pressed_le
     waveform_only = control == CONTROL_WAVEFORM;
     manual_test = control == CONTROL_MANUAL;
     manual_ready = open_sweep_done = short_sweep_done = false;
-    automatic_adjustment = start_hold_handled = adjustment_toggle_pending = false;
+    automatic_adjustment = use_compact_ui;
+    start_hold_handled = adjustment_toggle_pending = false;
     manual_frequency_used = false;
     if (manual_test) {
         manual_frequency_index = 0U;
@@ -750,6 +808,7 @@ static HAL_StatusTypeDef Init(const Mode_t *mode, GPIO_PinState start_pressed_le
         if (manual_frequency_index == MODE_COUNT) return HAL_ERROR;
     }
     manual_range = RANGE_G1;
+    manual_high_frequency_range = RANGE_G1;
     selected_range = RANGE_G1;
     if (!waveform_only) {
         for (uint8_t i = 0U; i < MODE_COUNT; ++i)
@@ -832,6 +891,11 @@ HAL_StatusTypeDef Measurement_Update(void) {
             RecordRangeFailure(source == SAMPLE_DUT_VOLTAGE ? "US" : "IS");
             return NextRange();
         }
+        if (status == HAL_TIMEOUT && !waveform_only && !UsesManualAdjustment() &&
+            active_mode == MODE_100_KHZ) {
+            RecordRangeFailure("T");
+            return NextRange();
+        }
         if (status == HAL_TIMEOUT && saw_window) {
             if (source == SAMPLE_DUT_VOLTAGE) DrawCapture(8U, 30U);
             else DrawCapture(41U, 63U);
@@ -859,18 +923,19 @@ HAL_StatusTypeDef Measurement_Update(void) {
             .alternate_range = RANGE_COUNT, .alternate_mode = MODE_COUNT,
         };
         tried_frequencies = 0U;
+        high_frequency_range = RANGE_G1;
         recorded_ranges = 0U;
         calibration_failure = NULL;
         if (UsesManualAdjustment()) {
-            if (start) {
-                if (manual_frequency_used)
-                    manual_frequency_index = (manual_frequency_index + 1U) % MODE_COUNT;
-            } else if (open && manual_range > RANGE_G0) {
-                --manual_range;
-            } else if (shorted && manual_range < RANGE_G4) {
-                ++manual_range;
-            }
+            if (start && manual_frequency_used)
+                manual_frequency_index = (manual_frequency_index + 1U) % MODE_COUNT;
             active_mode = frequency_order[manual_frequency_index];
+            bool limited_range = compact_ui && active_mode == MODE_100_KHZ;
+            MeasurementRange *range = limited_range ? &manual_high_frequency_range : &manual_range;
+            MeasurementRange minimum = limited_range ? RANGE_G1 : RANGE_G0;
+            MeasurementRange maximum = limited_range ? RANGE_G3 : RANGE_G4;
+            if (!start && open && *range > minimum) --*range;
+            else if (!start && shorted && *range < maximum) ++*range;
             manual_frequency_used = true;
         } else if (!waveform_only) {
             if (operation == TEST_OPEN) open_sweep_done = false;
